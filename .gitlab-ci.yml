@@ -24,6 +24,8 @@ unit-test-job:
     - ./mvnw test
   dependencies:
     - build-job # This tells the runner to download artifacts from build-job
+  needs:
+    - build-job # Download artifacts from build-job
 
 # This job only runs slower integration tests
 integration-test-job:
@@ -34,6 +36,9 @@ integration-test-job:
     - ./mvnw failsafe:integration-test
   dependencies:
     - build-job # This tells the runner to download artifacts from build-job
+  needs:
+    - build-job # To get the artifact
+    - unit-test-job # To ensure unit tests run first
 
 sonarqube-job:
   stage: security-analysis
