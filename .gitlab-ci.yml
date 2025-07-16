@@ -49,12 +49,12 @@ trivy-dependency-scan-job:
     - echo "Scanning dependencies for vulnerabilities..."
     # Scans the filesystem, focusing on the pom.xml
 
-  package-and-scan-job:
-    stage: package-and-scan
-    script:
-      - echo "Packaging application and building Docker image..."
-    dependencies:
-      - build-job
+package-and-scan-job:
+  stage: package-and-scan
+  script:
+    - echo "Packaging application and building Docker image..."
+  dependencies:
+    - build-job
 
 publish-job:
   stage: publish
