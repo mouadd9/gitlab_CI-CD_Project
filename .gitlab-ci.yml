@@ -1,0 +1,65 @@
+stages:
+  - build # compile source code
+  - test # unit + integration tests
+  - security-analysis # This stage runs security and quality checks in parallel.
+  - package-and-scan # # This stage packages your application into a Docker image and then scans that image for vulnerabilities.
+  - publish # This final job pushes the verified and scanned Docker image to the GitLab Container Registry. It should typically only run on your main branch.
+
+# This job compiles code
+build-job:
+  stage: build
+  image: eclipse-temurin:21-jdk
+  script:
+    - ./mvnw compile
+  artifacts:
+    paths:
+      - target/ # compiled code from the Runner's working directory.
+
+# This job only runs fast unit tests
+unit-test-job:
+  stage: test
+  image: eclipse-temurin:21-jdk
+  script:
+    - echo "Running unit tests..."
+    - ./mvnw test
+  dependencies:
+    - build-job # This tells the runner to download artifacts from build-job
+
+# This job only runs slower integration tests
+integration-test-job:
+  stage: test
+  image: eclipse-temurin:21-jdk
+  script:
+    - echo "Running integration tests..."
+    - ./mvnw failsafe:integration-test
+  dependencies:
+    - build-job # This tells the runner to download artifacts from build-job
+
+sonarqube-job:
+  stage: security-analysis
+  image: eclipse-temurin:21-jdk
+  script:
+    - echo "Running SonarQube analysis..."
+  dependencies:
+    - build-job
+
+trivy-dependency-scan-job:
+  stage: security-analysis
+  script:
+    - echo "Scanning dependencies for vulnerabilities..."
+    # Scans the filesystem, focusing on the pom.xml
+
+  package-and-scan-job:
+    stage: package-and-scan
+    script:
+      - echo "Packaging application and building Docker image..."
+    dependencies:
+      - build-job
+
+publish-job:
+  stage: publish
+  script:
+    - echo "Publishing Docker image..."
+  rules:
+    # Only run this job for commits to the main branch
+    - if: '$CI_COMMIT_BRANCH == "main"'
