@@ -5,17 +5,17 @@ stages:
   - package-and-scan # # This stage packages your application into a Docker image and then scans that image for vulnerabilities.
   - publish # This final job pushes the verified and scanned Docker image to the GitLab Container Registry. It should typically only run on your main branch.
 
-# This job compiles code
+# This job compiles code and generates /target folder that contains byte code
 build-job:
   stage: build
   image: eclipse-temurin:21-jdk
   script:
-    - ./mvnw compile
+    - echo "Compiling code..."
+    - ./mvnw clean compile
   artifacts:
     paths:
-      - target/ # compiled code from the Runner's working directory.
+      - target/ # here we define which files to save, we save compiled code from the Runner's working directory.
 
-# This job only runs fast unit tests
 unit-test-job:
   stage: test
   image: eclipse-temurin:21-jdk
@@ -24,10 +24,7 @@ unit-test-job:
     - ./mvnw test
   dependencies:
     - build-job # This tells the runner to download artifacts from build-job
-  needs:
-    - build-job # Download artifacts from build-job
 
-# This job only runs slower integration tests
 integration-test-job:
   stage: test
   image: eclipse-temurin:21-jdk
@@ -36,17 +33,22 @@ integration-test-job:
     - ./mvnw failsafe:integration-test
   dependencies:
     - build-job # This tells the runner to download artifacts from build-job
-  needs:
-    - build-job # To get the artifact
-    - unit-test-job # To ensure unit tests run first
 
-sonarqube-job:
+sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
   stage: security-analysis
   image: eclipse-temurin:21-jdk
+  tags:
+    # the tag for the local runner that can connect to the local SonarQube
+    - local-docker
   script:
     - echo "Running SonarQube analysis..."
+    - ./mvnw sonar:sonar \
+      -Dsonar.projectKey=my-springboot-project \
+      -Dsonar.host.url=http://sonarqube:9000 \
+      -Dsonar.login=$SONAR_TOKEN
+      -Dsonar.qualitygate.wait=true
   dependencies:
-    - build-job
+    - build-job  # this job needs compiled code for static analysis
 
 trivy-dependency-scan-job:
   stage: security-analysis
