@@ -42,7 +42,7 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
     - local-docker
   script:
     - echo "Running SonarQube analysis..."
-    - ./mvnw verify sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true
+    - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true
 
   dependencies:
     - build-job  # this job needs compiled code for static analysis
