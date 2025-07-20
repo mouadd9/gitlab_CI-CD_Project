@@ -16,36 +16,29 @@ build-job:
     paths:
       - target/ # here we define which files to save, we save compiled code from the Runner's working directory.
 
-unit-test-job:
+unit-and-integration-tests-job:
   stage: test
   image: eclipse-temurin:21-jdk
   script:
-    - echo "Running unit tests..."
-    - ./mvnw test
+    - echo "Running tests..."
+    - ./mvnw verify
   dependencies:
     - build-job # This tells the runner to download artifacts from build-job
+  artifacts:
+    paths:
+      - target/ # Pass the entire target directory, including test reports, to the next stage
 
-integration-test-job:
-  stage: test
-  image: eclipse-temurin:21-jdk
-  script:
-    - echo "Running integration tests..."
-    - ./mvnw failsafe:integration-test
-  dependencies:
-    - build-job # This tells the runner to download artifacts from build-job
 
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
   stage: security-analysis
   image: eclipse-temurin:21-jdk
   tags:
-    # the tag for the local runner that can connect to the local SonarQube
-    - local-docker
+    - local-docker # the tag for the local runner that can connect to the local SonarQube
+  dependencies:
+    - unit-and-integration-tests-job # This job now depends on the test job to get the coverage reports
   script:
     - echo "Running SonarQube analysis..."
-    - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true
-
-  dependencies:
-    - build-job  # this job needs compiled code for static analysis
+    - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
 
 trivy-dependency-scan-job:
   stage: security-analysis
