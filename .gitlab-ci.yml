@@ -20,17 +20,25 @@ unit-and-integration-tests-job:
   stage: test
   image: eclipse-temurin:21-jdk # This is the official Docker image containing Docker CLI tools
   services:
-    - docker:20.10.16-dind # this service provides the Docker daemon that the Docker CLI in your main container connects to, enabling you to build and manage containers within your CI/CD pipeline.
+    - docker:24-dind # this service provides the Docker daemon that the Docker CLI in your main container connects to, enabling you to build and manage containers within your CI/CD pipeline.
   variables:
     # Tell Testcontainers where to find the Docker daemon
     DOCKER_HOST: tcp://docker:2375
   dependencies:
     - build-job   
   before_script:
-    - apt-get update && apt-get install -y docker.io  
+    - apt-get update && apt-get install -y docker.io
+    # Wait for Docker to be ready
+    - until docker info; do echo "Waiting for Docker..."; sleep 1; done
+    
+    # Test Docker connectivity
+    - docker run --rm hello-world 
   script:
     - echo "Running tests..."
     - ./mvnw verify
+  after_script:
+    - echo "=== Integration Test Reports ==="
+    - find target/failsafe-reports -name "*.txt" -exec cat {} \; 2>/dev/null || echo "No reports found"
   artifacts:
     paths:
       - target/ # Pass the entire target directory, including test reports, to the next stage
