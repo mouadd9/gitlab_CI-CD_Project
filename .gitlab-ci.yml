@@ -18,16 +18,22 @@ build-job:
 
 unit-and-integration-tests-job:
   stage: test
-  image: eclipse-temurin:21-jdk
+  image: docker:20.10.16 # This is the official Docker image containing Docker CLI tools
+  services:
+    - docker:20.10.16-dind # this service provides the Docker daemon that the Docker CLI in your main container connects to, enabling you to build and manage containers within your CI/CD pipeline.
+  variables:
+    # Tell Testcontainers where to find the Docker daemon
+    DOCKER_HOST: tcp://docker:2375
+  dependencies:
+    - build-job   
+  before_script:
+    - apk add --no-cache maven openjdk21  
   script:
     - echo "Running tests..."
     - ./mvnw verify
-  dependencies:
-    - build-job # This tells the runner to download artifacts from build-job
   artifacts:
     paths:
       - target/ # Pass the entire target directory, including test reports, to the next stage
-
 
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
   stage: security-analysis
