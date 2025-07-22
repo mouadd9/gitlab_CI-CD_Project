@@ -18,30 +18,21 @@ build-job:
 
 unit-and-integration-tests-job:
   stage: test
-  image: eclipse-temurin:21-jdk # This is the official Docker image containing Docker CLI tools
+  image: eclipse-temurin:21-jdk 
   services:
     - docker:24-dind # this service provides the Docker daemon that the Docker CLI in your main container connects to, enabling you to build and manage containers within your CI/CD pipeline.
   variables:
-    # Tell Testcontainers where to find the Docker daemon
-    DOCKER_HOST: tcp://docker:2375
+    DOCKER_HOST: tcp://docker:2375 # Tell Testcontainers where to find the Docker daemon
   dependencies:
     - build-job   
   before_script:
-    - apt-get update && apt-get install -y docker.io
-    # Wait for Docker to be ready
-    - until docker info; do echo "Waiting for Docker..."; sleep 1; done
-    
-    # Test Docker connectivity
-    - docker run --rm hello-world 
+    - apt-get update && apt-get install -y docker.io # we use this to install Docker CLI
   script:
     - echo "Running tests..."
-    - ./mvnw verify
-  after_script:
-    - echo "=== Integration Test Reports ==="
-    - find target/failsafe-reports -name "*.txt" -exec cat {} \; 2>/dev/null || echo "No reports found"
+    - ./mvnw test failsafe:integration-test
   artifacts:
     paths:
-      - target/ # Pass the entire target directory, including test reports, to the next stage
+      - target/
 
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
   stage: security-analysis
@@ -56,21 +47,97 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
 
 trivy-dependency-scan-job:
   stage: security-analysis
+  image: aquasec/trivy:latest
   script:
     - echo "Scanning dependencies for vulnerabilities..."
-    # Scans the filesystem, focusing on the pom.xml
+    # Scans the filesystem, finds the pom.xml, and fails on high/critical issues
+    - trivy fs --exit-code 1 --severity HIGH,CRITICAL .
 
-package-and-scan-job:
+package-job: 
   stage: package-and-scan
-  script:
-    - echo "Packaging application and building Docker image..."
+  image: eclipse-temurin:21-jdk
   dependencies:
-    - build-job
+    - build-job # This job depends on the build job to get the compiled code
+  script:
+    - echo "Packaging application into JAR..."
+    - ./mvnw package -DskipTests -DskipITs # package and skip tests
+  artifacts: 
+    paths:
+      - target/*.jar # Save the JAR file for the next job
+    exclude:
+      - target/*original.jar
+
+build-image-job:
+  stage: package-and-scan
+  image: docker:24-cli # this image provides the Docker CLI
+  services:
+    - docker:24-dind # this service provides the Docker daemon for building images
+  needs: 
+    - job: package-job 
+      artifacts: true # This job needs the JAR file from the package-job 
+  script:
+    - echo "Building Docker image with JAR file..."
+    - docker build --tag my-app:$CI_COMMIT_SHORT_SHA .
+    - echo "Saving Docker image as a .tar artifact..."
+    - docker save my-app:$CI_COMMIT_SHORT_SHA -o my-image.tar
+  artifacts:
+    paths:
+      - my-image.tar 
+    expire_in: 1 hour
+       
+scan-image-job:
+  stage: package-and-scan
+  image: docker:24-cli 
+  services:
+    - docker:24-dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    TRIVY_VERSION: '0.52.2'
+  before_script:
+    - apk add --no-cache curl
+    - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${TRIVY_VERSION}
+  needs: 
+    - job: build-image-job 
+      artifacts: true 
+  script:
+    - echo "Loading Docker image from .tar artifact..."
+    - docker load --input my-image.tar
+    - echo "Scanning Docker image for vulnerabilities..."
+    - trivy image --exit-code 1 --severity HIGH,CRITICAL my-app:$CI_COMMIT_SHORT_SHA
 
 publish-job:
   stage: publish
+  image: docker:24-cli
+  services:
+    - docker:24-dind
+  dependencies:
+    - build-image-job # This job depends on the build-image-job to get the Docker image
   script:
-    - echo "Publishing Docker image..."
+    - echo "Logging into GitLab Container Registry..."
+    # the Docker client should be able to authenticatewith a container registry in order for it to push images
+    # outside of Gitlab CI/CD, you would typically use a Docker login command with your credentials
+    # docker login registry.example.com -u <username> -p <password>
+    # but now we use the GitLab predefined variables to log in, 
+    # CI_REGISTRY_USER holds a per-job user with read-write access to the container registry
+    # Its password is also automatically created and available in CI_REGISTRY_PASSWORD
+    # $CI_REGISTRY This is the address of the Docker registry you are logging into. GitLab sets this predefined variable to the URL of your instance's container registry 
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+    - echo "Loading Docker image from .tar artifact..."
+    - docker load --input my-image.tar
+    - echo "loaded image should be named my-app:$CI_COMMIT_SHORT_SHA"
+    - echo "repository:my-app version:$CI_COMMIT_SHORT_SHA" # a repository is a collection of different versions of a single Docker image
+    - docker images # List all Docker images to verify the image is loaded
+    
+    # we rename the image to include the registry URL
+    - echo "Tagging image for the registry..." # a registry is a collection of repositories, each repository contains different versions of a single Docker image 
+    - docker tag my-app:$CI_COMMIT_SHORT_SHA $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+    - docker tag my-app:$CI_COMMIT_SHORT_SHA $CI_REGISTRY_IMAGE:latest
+
+    - echo "listing images before pushing to inspect the tags and repositories..."
+    - docker images
+
+    - echo "Pushing image $CI_REGISTRY_IMAGE and all its tags to the registry..."
+    - docker push --all-tags $CI_REGISTRY_IMAGE # we push all tags of the image 
   rules:
     # Only run this job for commits to the main branch
     - if: '$CI_COMMIT_BRANCH == "main"'
