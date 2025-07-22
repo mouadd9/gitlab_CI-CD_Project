@@ -57,7 +57,7 @@ package-job:
   stage: package-and-scan
   image: eclipse-temurin:21-jdk
   dependencies:
-    - build-job # This job depends on the build job to get the compiled code
+    - build-job
   script:
     - echo "Packaging application into JAR..."
     - ./mvnw package -DskipTests -DskipITs # package and skip tests
