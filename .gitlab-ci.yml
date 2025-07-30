@@ -4,9 +4,23 @@ stages:
   - security-analysis # This stage runs security and quality checks in parallel.
   - package-and-scan # # This stage packages your application into a Docker image and then scans that image for vulnerabilities.
   - publish # This final job pushes the verified and scanned Docker image to the GitLab Container Registry. It should typically only run on your main branch.
-  - deploy
+   #- deploy # traditional stage that deploys directly to clusters
+  - gitops-update # triggers a deployment using a GitOps workflow with Flux.
 
-# This job compiles code and generates /target folder that contains byte code
+workflow:
+  rules:
+    # Merge Request Pipeline (when merge request is submitted)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    # Feature Branch Pipeline (when code is pushed to feature branch with no submitted MR)
+    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main" && $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null'
+    # Main Branch Pipeline (when code is merged to main -> Deploys to Pre-Prod)
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    # Production Branch Pipeline (when code is merged to production -> Deploys to Prod)
+    - if: '$CI_COMMIT_BRANCH == "production"'
+    # Rule 3: Run a pipeline if a tag is pushed.
+    - if: '$CI_COMMIT_TAG'
+
+# This job compiles code runs on all pipelines
 build-job:
   stage: build
   image: eclipse-temurin:21-jdk
@@ -17,6 +31,7 @@ build-job:
     paths:
       - target/ # here we define which files to save, we save compiled code from the Runner's working directory.
 
+# this job tests compiled code, runs on all pipelines
 unit-and-integration-tests-job:
   stage: test
   image: eclipse-temurin:21-jdk 
@@ -35,6 +50,7 @@ unit-and-integration-tests-job:
     paths:
       - target/
 
+# this job scans code for vulnerabilities and checks code quality runs on all pipelines
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
   stage: security-analysis
   image: eclipse-temurin:21-jdk
@@ -44,8 +60,9 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
     - unit-and-integration-tests-job # This job now depends on the test job to get the coverage reports
   script:
     - echo "Running SonarQube analysis..."
-    - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+  #  - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
 
+# this job scans dependencies runs on all pipelines
 trivy-dependency-scan-job:
   stage: security-analysis
   image: 
@@ -65,6 +82,7 @@ trivy-dependency-scan-job:
       - trivy-report.json
   allow_failure: false
 
+# this job packages code into a .jar, only runs when code is merged to the main
 package-job: 
   stage: package-and-scan
   image: eclipse-temurin:21-jdk
@@ -78,7 +96,10 @@ package-job:
       - target/*.jar # Save the JAR file for the next job
     exclude:
       - target/*original.jar
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
+# we only build and scan images when code is merged into main
 build-image-job:
   stage: package-and-scan
   image: docker:24-cli # this image provides the Docker CLI
@@ -96,7 +117,10 @@ build-image-job:
     paths:
       - my-image.tar 
     expire_in: 1 hour
-       
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+# we only build and scan images in the Merge Request pipeline
 scan-image-job:
   stage: package-and-scan
   image: docker:24-cli 
@@ -116,9 +140,10 @@ scan-image-job:
     - docker load --input my-image.tar
     - echo "Scanning Docker image for vulnerabilities..."
     - trivy image --exit-code 1 --severity HIGH,CRITICAL my-app:$CI_COMMIT_SHORT_SHA
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
-
-# this job is only executed after the code is approved and merged to the main branch
+# only runs after code is merged to main (ready for pre prod)
 publish-job:
   stage: publish
   image: docker:24-cli
@@ -128,30 +153,103 @@ publish-job:
     - build-image-job # This job depends on the build-image-job to get the Docker image
   script:
     - echo "Logging into GitLab Container Registry..."
-    # the Docker client should be able to authenticatewith a container registry in order for it to push images
-    # outside of Gitlab CI/CD, you would typically use a Docker login command with your credentials
-    # docker login registry.example.com -u <username> -p <password>
-    # but now we use the GitLab predefined variables to log in, 
-    # CI_REGISTRY_USER holds a per-job user with read-write access to the container registry
-    # Its password is also automatically created and available in CI_REGISTRY_PASSWORD
-    # $CI_REGISTRY This is the address of the Docker registry you are logging into. GitLab sets this predefined variable to the URL of your instance's container registry 
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
     - echo "Loading Docker image from .tar artifact..."
     - docker load --input my-image.tar
     - echo "loaded image should be named my-app:$CI_COMMIT_SHORT_SHA"
-    - echo "repository:my-app version:$CI_COMMIT_SHORT_SHA" # a repository is a collection of different versions of a single Docker image
-    - docker images # List all Docker images to verify the image is loaded
-    
-    # we rename the image to include the registry URL
-    - echo "Tagging image for the registry..." # a registry is a collection of repositories, each repository contains different versions of a single Docker image 
+    - echo "Tagging image with the link of the container registry of this project so that it can be pulled from the registry..."
     - docker tag my-app:$CI_COMMIT_SHORT_SHA $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
     - docker tag my-app:$CI_COMMIT_SHORT_SHA $CI_REGISTRY_IMAGE:latest
-
     - echo "listing images before pushing to inspect the tags and repositories..."
     - docker images
-
-    - echo "Pushing image $CI_REGISTRY_IMAGE and all its tags to the registry..."
-    - docker push --all-tags $CI_REGISTRY_IMAGE # we push all tags of the image 
+    - echo "Pushing image to $CI_REGISTRY_IMAGE and all its tags to the registry..."
+    - docker push --all-tags $CI_REGISTRY_IMAGE
   rules:
-    # Only run this job for commits to the main branch
-    - if: '$CI_COMMIT_BRANCH == "main"' # CI_COMMIT_BRANCH is a piece of information that your CI/CD system automatically provides to tell you which branch your code is running from.
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+
+
+
+
+# ////////////////////////////////////////////////////////// Legacy code
+# ////////////////////////////////////////////////////////// Legacy code
+
+# deploys code in a temporary environment to test the results of a feature before merging it to main
+# only executed on merge requests
+#deploy-review:
+#  stage: deploy
+#  # image: google/cloud-sdk:latest
+#  environment:
+#    name: review/$CI_COMMIT_REF_NAME
+#    # url: https://staging.your-app.com
+#    on_stop: stop-review # name of another job that should be run when the environment is "stopped."
+#  script:
+#    - echo "Deploying..."
+#  rules:
+#    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# this job is executed to clear out resources after a merge request is done
+#stop-review:
+#  stage: deploy
+#  script:
+#    - echo "Remove review app"
+#    - echo "scripts to shut down servers, delete cloud resources, or perform other cleanup tasks to save costs"
+#  environment:
+#    name: review/$CI_COMMIT_REF_NAME
+#    action: stop
+#  rules:
+#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#      when: manual
+
+
+#deploy-staging:
+#  stage: deploy
+#  # This job needs an image with your cloud provider's CLI (e.g., kubectl, gcloud, aws)
+#  # image: google/cloud-sdk:latest # Example for Google Kubernetes Engine
+#  environment:
+#    name: staging
+#    # url: https://staging.your-app.com # URL to your staging environment
+#  needs:
+#    - job: publish-job
+#      artifacts: false # We don't need artifacts, the image is in the registry
+#  script:
+#    - echo "Deploying to Staging Environment..."
+#    # The actual deployment commands depend on your infrastructure (Kubernetes, VMs, etc.)
+#    # Example for Kubernetes:
+#    # - gcloud auth activate-service-account --key-file=$GCP_SA_KEY
+#    # - gcloud container clusters get-credentials your-staging-cluster --region your-region
+#    # - kubectl set image deployment/my-app my-app=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+#  rules:
+#    # Run this job only for commits on the main branch
+#    - if: '$CI_COMMIT_BRANCH == "main"'
+#
+#deploy-production:
+#  stage: deploy
+#  # This job needs an image with your cloud provider's CLI (e.g., kubectl, gcloud, aws)
+#  # image: google/cloud-sdk:latest # Example for Google Kubernetes Engine
+#  environment:
+#    name: production
+#    # url: https://your-app.com # URL to your live application
+#  needs:
+#    - job: publish-job
+#      artifacts: false
+#  script:
+#    - echo "Deploying to Production Environment..."
+#    # Use production-scoped CI/CD variables for credentials
+#    # The image tag will be the git tag if available, otherwise the commit SHA
+#    - |
+#      if [[ -n "$CI_COMMIT_TAG" ]]; then
+#        IMAGE_TAG="$CI_COMMIT_TAG"
+#      else
+#        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
+#      fi
+#    - echo "Deploying image $CI_REGISTRY_IMAGE:$IMAGE_TAG"
+#    # - kubectl set image deployment/my-app my-app=$CI_REGISTRY_IMAGE:$IMAGE_TAG
+#  rules:
+#    # Allow manual deployment from the 'production' branch
+#    # this checks if the code has been merged to a branch called production
+#    - if: '$CI_COMMIT_BRANCH == "production"'
+#      when: manual
+#    # Allow manual deployment when a tag is created
+#    - if: '$CI_COMMIT_TAG'
+#      when: manual
