@@ -1,28 +1,41 @@
-#network.tf
+# network.tf
 
-# we create a logically isolated VPC named gke-network
-# we create a subnet named gke-subnetwork inside the VPC we just defined.
-# This is where our GKE cluster's nodes will actually live.
+# our architecture requires a network so that our cluster's nodes can communicate with each other and with the outside world.
+# without a VPC, our GKE cluster's VMs would be isolated and not reachable.
+# In GKE, we use Google Cloud's Virtual Private Cloud (VPC) to create a network for our cluster.
+# A VPC is a virtualized network that provides a private, isolated environment for your resources.
+# In this file, we define the VPC and its subnetwork.
 
-# a VPC is Global not regional (it can span across multiple Regions)
+
+# VPC a private network that provides isolation and control over our resources (VMs).
+# Global by default → one VPC can span multiple regions
 resource "google_compute_network" "vpc" {
   name                    = "gke-vpc-network"
-  auto_create_subnetworks = false
+  description             = "VPC network for GKE cluster"
+  auto_create_subnetworks = false # we want to create our own subnets manually
 }
 
-# a subnet belongs to only one region
-# We create an implicit dependency by referencing the network within the subnetwork Terraform now understands that it must create the network before it can create the subnetwork.
+# we create a subnet which is a smaller network segments inside our VPC for better organization, control, and security
+
+# In GCP, subnets are tied to a specific region. So your VPC spans regions, but each subnet is regional.
+# This helps with latency, fault tolerance, and compliance.
+# Subnets define the IP address ranges for resources inside the VPC
+# The subnet is where our GKE cluster's nodes will actually live.
+# Subnets let you apply different firewall rules or routing policies per subnet, for tighter security and control.
 resource "google_compute_subnetwork" "vpc_subnetwork" {
   name          = "gke-vpc-subnetwork"
-  region        = var.region
-  ip_cidr_range = "10.10.0.0/24" # The purpose of this range is to assign IP addresses to the primary network interfaces (vNICs) of Compute Engine virtual machines. In our GKE context, this means the worker nodes themselves get their IP addresses from this pool.
-  network       = google_compute_network.vpc.id
+  network       = google_compute_network.vpc.id # links the subnet to the VPC you created.
+  region        = var.region # subnetworks are regional
+  ip_cidr_range = "10.10.0.0/24" # The cluster nodes (VMs) get IPs from this subnet range because they are launched inside this subnet — Google Cloud assigns node IPs from this block.
 
   # private_ip_google_access = true
 
   # Add secondary ranges for Pods and Services
-  # These are additional, non-overlapping CIDR blocks that are logically associated with the same subnet. They are not used for assigning IPs to VM network interfaces directly. Instead, they provide IP pools for Alias IP ranges.
 
+  # Each node in the cluster is allocated a subset of this pod IP range, When a pod is created on a Node, it gets an IP from that node’s pod CIDR block.
+  # Routing between Nodes happens at the VPC level
+  # Since pod IP ranges are part of the VPC’s secondary IP ranges, Google Cloud’s virtual router knows how to route pod IP traffic between nodes.
+  # When a node sends a packet to a pod on another node, it sends it via the VPC network to the destination node’s primary IP (the node VM’s IP in the main subnet).
   secondary_ip_range {
     range_name    = "pod-ip-range"
     ip_cidr_range = "10.20.0.0/16"

@@ -1,9 +1,7 @@
 #gke.tf
-
-
 resource "google_container_cluster" "primary" {
   name = var.cluster_name
-  location = var.region
+  location = var.zone
   networking_mode = "VPC_NATIVE"
   # Connect the cluster to our custom network
   network    = google_compute_network.vpc.id
@@ -12,11 +10,11 @@ resource "google_container_cluster" "primary" {
   initial_node_count       = 1
   # Tell the cluster which secondary ranges to use
   ip_allocation_policy {
+    # secondary IP range within a VPC subnet that will be used for pod IP addresses in your GKE cluster
     cluster_secondary_range_name  = google_compute_subnetwork.vpc_subnetwork.secondary_ip_range[0].range_name
+    # secondary IP range within a VPC subnet that will be used for service IP addresses in your GKE cluster
     services_secondary_range_name = google_compute_subnetwork.vpc_subnetwork.secondary_ip_range[1].range_name
   }
-  # In your gke.tf file, inside the google_container_cluster resource
-
   private_cluster_config {
     enable_private_nodes    = true
     enable_private_endpoint = false
@@ -32,17 +30,13 @@ resource "google_container_node_pool" "primary_nodes" {
   name       = "primary-node-pool"
   cluster    = google_container_cluster.primary.id
   node_count = 1 # Set the number of nodes (VMs) in the pool
-
   node_config {
     machine_type = "e2-medium"
     oauth_scopes = [
       "https://www.googleapis.com/auth/cloud-platform"
     ]
-
     # service_account = google_service_account.gke_nodes_sa.email
-
   }
-
   # management
 }
 
