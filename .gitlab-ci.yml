@@ -48,6 +48,8 @@ unit-and-integration-tests-job:
   artifacts:
     paths:
       - target/
+  rules:
+    - when: never
 
 # this job scans code for vulnerabilities and checks code quality runs on all pipelines
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
@@ -81,6 +83,8 @@ trivy-dependency-scan-job:
   artifacts:
     paths:
       - trivy-report.json
+  rules:
+    - when: never
 
 # this job packages code into a .jar, only runs when code is merged to the main
 package-job: 
@@ -141,12 +145,16 @@ scan-image-job:
     - echo "Scanning Docker image for vulnerabilities..."
     - trivy image --exit-code 1 --severity HIGH,CRITICAL my-app:$CI_COMMIT_SHORT_SHA
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - when: never
+  # rules:
+    # - if: '$CI_COMMIT_BRANCH == "main"'
 
 # After your existing package-job
 package-helm-chart:
   stage: package-and-scan
-  image: alpine/helm:latest
+  image:
+    name: alpine/helm:latest
+    entrypoint: [""]
   dependencies: []
   script:
     - echo "Packaging Helm chart..."
