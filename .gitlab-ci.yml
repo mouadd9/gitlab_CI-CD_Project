@@ -197,7 +197,9 @@ publish-container-image:
 
 publish-helm-chart:
   stage: publish
-  image: alpine/helm:latest
+  image:
+    name: alpine/helm:latest
+    entrypoint: [""]
   dependencies:
     - package-helm-chart
   before_script:
