@@ -159,13 +159,21 @@ package-helm-chart:
   script:
     - echo "Packaging Helm chart..."
     - cd helm-chart/
-    # --version $CI_COMMIT_SHORT_SHA : sets the chart's own version number.
-    # --app-version $CI_COMMIT_SHORT_SHA : sets the appVersion inside the Chart.yaml file. This field indicates the version of the application being deployed. Using the commit ID for both makes it very easy to trace a deployed package directly back to the exact code it was built from.
-    - helm package . --version 0.1.0+$CI_COMMIT_SHORT_SHA --app-version $CI_COMMIT_SHORT_SHA
+    # 1. Read the version from Chart.yaml
+    - CHART_VERSION=$(yq eval '.version' Chart.yaml)
+    - echo "Found chart version $CHART_VERSION"
+
+    # 2. Use the dynamic $CHART_VERSION variable instead of "0.1.0"
+    - helm package . --version ${CHART_VERSION}+${CI_COMMIT_SHORT_SHA} --app-version $CI_COMMIT_SHORT_SHA
+
+    # 3. Create a .env file to pass the version to the next stage
+    - echo "CHART_VERSION=$CHART_VERSION" > ../build.env
     - echo "Chart packaged as helm-chart-$CI_COMMIT_SHORT_SHA.tgz"
   artifacts:
     paths: # tells GitLab to find the newly created .tgz file inside the helm-chart directory and save it as a job artifact
       - helm-chart/*.tgz
+    reports:
+      dotenv: build.env
     expire_in: 1 hour
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -214,8 +222,10 @@ publish-helm-chart:
 
 update-gitops-repo:
   stage: deploy
-  image: alpine/git:latest
-  script:
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
+  before_script:
     - apk add --no-cache curl # Install curl to download yq
     - curl -L https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/bin/yq # The server sends back a binary file in the HTTP response body
     - chmod +x /usr/bin/yq # Make the yq binary executable
@@ -223,9 +233,12 @@ update-gitops-repo:
     - git config --global user.name "GitLab Pipeline"
     - echo "Cloning GitOps repository..."
     - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/mouadd9/gitops-infra-repo
+  script:
     - cd gitops-infra-repo
     - echo "Updating Helm chart version in GitOps repository..."
-    - yq eval '.spec.sources[0].targetRevision = "'$CI_COMMIT_SHORT_SHA'"' -i applications/app-staging.yaml
+    - echo "Updating Helm chart version to $CHART_VERSION+$CI_COMMIT_SHORT_SHA"
+
+    - yq eval '.spec.sources[0].targetRevision = "'${CHART_VERSION}+${CI_COMMIT_SHORT_SHA}'"' -i applications/app-staging.yaml
     - yq eval '.image.tag = "'$CI_COMMIT_SHORT_SHA'"' -i environments/values-staging.yaml
     - git add .
     - |
