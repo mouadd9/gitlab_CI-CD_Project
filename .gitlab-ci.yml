@@ -232,7 +232,7 @@ update-gitops-repo:
     - git config --global user.email "pipeline@mycompany.com"
     - git config --global user.name "GitLab Pipeline"
     - echo "Cloning GitOps repository..."
-    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/mouadd9/gitops-infra-repo
+    - git clone https://pipeline:${GITOPS_REPO_TOKEN}@gitlab.com/mouadd9/gitops-infra-repo
   script:
     - cd gitops-infra-repo
     - echo "Updating Helm chart version in GitOps repository..."
