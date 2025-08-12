@@ -187,9 +187,14 @@ publish-container-image:
   dependencies:
     - build-image-job # This job depends on the build-image-job to get the Docker image
   before_script:
+    - echo "Ensuring a clean workspace..."
+    - rm -rf helm-chart/ # Forcefully remove any old chart directory
+    - git checkout -- helm-chart/ # Restore the correct version from the commit
+    - echo "Current helm chart files:"
+    - ls -la helm-chart/ # A diagnostic step to see what files are actually there
+  script:
     - echo "Logging into GitLab Container Registry..."
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
-  script:
     - echo "Loading Docker image from .tar artifact..."
     - docker load --input my-image.tar
     - echo "loaded image should be named my-app:$CI_COMMIT_SHORT_SHA"
