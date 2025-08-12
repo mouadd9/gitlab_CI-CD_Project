@@ -161,7 +161,7 @@ package-helm-chart:
     - cd helm-chart/
     # --version $CI_COMMIT_SHORT_SHA : sets the chart's own version number.
     # --app-version $CI_COMMIT_SHORT_SHA : sets the appVersion inside the Chart.yaml file. This field indicates the version of the application being deployed. Using the commit ID for both makes it very easy to trace a deployed package directly back to the exact code it was built from.
-    - helm package . --version $CI_COMMIT_SHORT_SHA --app-version $CI_COMMIT_SHORT_SHA
+    - helm package . --version 0.1.0+$CI_COMMIT_SHORT_SHA --app-version $CI_COMMIT_SHORT_SHA
     - echo "Chart packaged as helm-chart-$CI_COMMIT_SHORT_SHA.tgz"
   artifacts:
     paths: # tells GitLab to find the newly created .tgz file inside the helm-chart directory and save it as a job artifact
