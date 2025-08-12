@@ -4,8 +4,7 @@ stages:
   - security-analysis # This stage runs security and quality checks in parallel.
   - package-and-scan # # This stage packages your application into a Docker image and then scans that image for vulnerabilities.
   - publish # This final job pushes the verified and scanned Docker image to the GitLab Container Registry. It should typically only run on your main branch.
-   #- deploy # traditional stage that deploys directly to clusters
-  - gitops-update # triggers a deployment using a GitOps workflow with Flux.
+  - deploy # triggers a deployment using a GitOps workflow with Flux.
 
 workflow:
   rules:
@@ -61,6 +60,8 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
   script:
     - echo "Running SonarQube analysis..."
   #  - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+  rules:
+    - when: never
 
 # this job scans dependencies runs on all pipelines
 trivy-dependency-scan-job:
@@ -80,7 +81,6 @@ trivy-dependency-scan-job:
   artifacts:
     paths:
       - trivy-report.json
-  allow_failure: false
 
 # this job packages code into a .jar, only runs when code is merged to the main
 package-job: 
@@ -143,17 +143,37 @@ scan-image-job:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
+# After your existing package-job
+package-helm-chart:
+  stage: package-and-scan
+  image: alpine/helm:latest
+  dependencies: []
+  script:
+    - echo "Packaging Helm chart..."
+    - cd helm-chart/
+    # --version $CI_COMMIT_SHORT_SHA : sets the chart's own version number.
+    # --app-version $CI_COMMIT_SHORT_SHA : sets the appVersion inside the Chart.yaml file. This field indicates the version of the application being deployed. Using the commit ID for both makes it very easy to trace a deployed package directly back to the exact code it was built from.
+    - helm package . --version $CI_COMMIT_SHORT_SHA --app-version $CI_COMMIT_SHORT_SHA
+    - echo "Chart packaged as helm-chart-$CI_COMMIT_SHORT_SHA.tgz"
+  artifacts:
+    paths: # tells GitLab to find the newly created .tgz file inside the helm-chart directory and save it as a job artifact
+      - helm-chart/*.tgz
+    expire_in: 1 hour
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
 # only runs after code is merged to main (ready for pre prod)
-publish-job:
+publish-container-image:
   stage: publish
   image: docker:24-cli
   services:
     - docker:24-dind
   dependencies:
     - build-image-job # This job depends on the build-image-job to get the Docker image
-  script:
+  before_script:
     - echo "Logging into GitLab Container Registry..."
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  script:
     - echo "Loading Docker image from .tar artifact..."
     - docker load --input my-image.tar
     - echo "loaded image should be named my-app:$CI_COMMIT_SHORT_SHA"
@@ -167,89 +187,42 @@ publish-job:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
+publish-helm-chart:
+  stage: publish
+  image: alpine/helm:latest
+  dependencies:
+    - package-helm-chart
+  before_script:
+    - echo "Logging into GitLab Container Registry for Helm charts..."
+    - echo "$CI_REGISTRY_PASSWORD" | helm registry login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+  script:
+    - echo "Pushing Helm chart to registry..."
+    - helm push helm-chart/*.tgz oci://$CI_REGISTRY/$CI_PROJECT_PATH
+    - echo "✅ Chart pushed successfully!"
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
-
-
-
-# ////////////////////////////////////////////////////////// Legacy code
-# ////////////////////////////////////////////////////////// Legacy code
-
-# deploys code in a temporary environment to test the results of a feature before merging it to main
-# only executed on merge requests
-#deploy-review:
-#  stage: deploy
-#  # image: google/cloud-sdk:latest
-#  environment:
-#    name: review/$CI_COMMIT_REF_NAME
-#    # url: https://staging.your-app.com
-#    on_stop: stop-review # name of another job that should be run when the environment is "stopped."
-#  script:
-#    - echo "Deploying..."
-#  rules:
-#    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-
-# this job is executed to clear out resources after a merge request is done
-#stop-review:
-#  stage: deploy
-#  script:
-#    - echo "Remove review app"
-#    - echo "scripts to shut down servers, delete cloud resources, or perform other cleanup tasks to save costs"
-#  environment:
-#    name: review/$CI_COMMIT_REF_NAME
-#    action: stop
-#  rules:
-#    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-#      when: manual
-
-
-#deploy-staging:
-#  stage: deploy
-#  # This job needs an image with your cloud provider's CLI (e.g., kubectl, gcloud, aws)
-#  # image: google/cloud-sdk:latest # Example for Google Kubernetes Engine
-#  environment:
-#    name: staging
-#    # url: https://staging.your-app.com # URL to your staging environment
-#  needs:
-#    - job: publish-job
-#      artifacts: false # We don't need artifacts, the image is in the registry
-#  script:
-#    - echo "Deploying to Staging Environment..."
-#    # The actual deployment commands depend on your infrastructure (Kubernetes, VMs, etc.)
-#    # Example for Kubernetes:
-#    # - gcloud auth activate-service-account --key-file=$GCP_SA_KEY
-#    # - gcloud container clusters get-credentials your-staging-cluster --region your-region
-#    # - kubectl set image deployment/my-app my-app=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
-#  rules:
-#    # Run this job only for commits on the main branch
-#    - if: '$CI_COMMIT_BRANCH == "main"'
-#
-#deploy-production:
-#  stage: deploy
-#  # This job needs an image with your cloud provider's CLI (e.g., kubectl, gcloud, aws)
-#  # image: google/cloud-sdk:latest # Example for Google Kubernetes Engine
-#  environment:
-#    name: production
-#    # url: https://your-app.com # URL to your live application
-#  needs:
-#    - job: publish-job
-#      artifacts: false
-#  script:
-#    - echo "Deploying to Production Environment..."
-#    # Use production-scoped CI/CD variables for credentials
-#    # The image tag will be the git tag if available, otherwise the commit SHA
-#    - |
-#      if [[ -n "$CI_COMMIT_TAG" ]]; then
-#        IMAGE_TAG="$CI_COMMIT_TAG"
-#      else
-#        IMAGE_TAG="$CI_COMMIT_SHORT_SHA"
-#      fi
-#    - echo "Deploying image $CI_REGISTRY_IMAGE:$IMAGE_TAG"
-#    # - kubectl set image deployment/my-app my-app=$CI_REGISTRY_IMAGE:$IMAGE_TAG
-#  rules:
-#    # Allow manual deployment from the 'production' branch
-#    # this checks if the code has been merged to a branch called production
-#    - if: '$CI_COMMIT_BRANCH == "production"'
-#      when: manual
-#    # Allow manual deployment when a tag is created
-#    - if: '$CI_COMMIT_TAG'
-#      when: manual
+update-gitops-repo:
+  stage: deploy
+  image: alpine/git:latest
+  script:
+    - apk add --no-cache curl # Install curl to download yq
+    - curl -L https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/bin/yq # The server sends back a binary file in the HTTP response body
+    - chmod +x /usr/bin/yq # Make the yq binary executable
+    - git config --global user.email "pipeline@mycompany.com"
+    - git config --global user.name "GitLab Pipeline"
+    - echo "Cloning GitOps repository..."
+    - git clone https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/mouadd9/gitops-infra-repo
+    - cd gitops-infra-repo
+    - echo "Updating Helm chart version in GitOps repository..."
+    - yq eval '.spec.sources[0].targetRevision = "'$CI_COMMIT_SHORT_SHA'"' -i applications/app-staging.yaml
+    - yq eval '.image.tag = "'$CI_COMMIT_SHORT_SHA'"' -i environments/values-staging.yaml
+    - git add .
+    - |
+      git commit -m "Deploy version $CI_COMMIT_SHORT_SHA
+      Image: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+      Chart: oci://$CI_REGISTRY/$CI_PROJECT_PATH/helm-chart:$CI_COMMIT_SHORT_SHA
+      Pipeline: $CI_PIPELINE_URL"
+    - git push
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'

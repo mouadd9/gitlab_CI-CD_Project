@@ -1,0 +1,12 @@
+# templates/mysql-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce  # Only one Pod can mount this volume at a time
+  storageClassName: standard-rwo  # Explicitly specify for better predictability
+  resources:
+    requests:
+      storage: 5Gi  # Request 10GB of storage for the database

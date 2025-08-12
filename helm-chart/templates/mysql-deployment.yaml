@@ -1,0 +1,58 @@
+# templates/mysql-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-deployment
+spec:
+  replicas: 1  # Single MySQL instance for simplicity
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql  # This label connects to our Service selector
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0
+          env:
+            # These environment variables configure MySQL at startup
+           #- name: MYSQL_ROOT_PASSWORD
+           #  value: "password"
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: mysql-root-password
+            - name: MYSQL_DATABASE
+              value: "bank_account_db"  # Creates your database automatically
+          ports:
+            - containerPort: 3306  # MySQL's default port inside the container
+              name: mysql-port
+          volumeMounts:
+            - name: mysql-storage
+              mountPath: /var/lib/mysql  # Where MySQL stores its data files
+          # Health checks ensure MySQL is ready before accepting connections
+          livenessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command:
+                - mysqladmin
+                - ping
+                - -h
+                - localhost
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: mysql-storage
+          persistentVolumeClaim:
+            claimName: mysql-pvc  # References our persistent storage claim
