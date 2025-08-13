@@ -29,6 +29,7 @@ build-job:
   artifacts:
     paths:
       - target/ # here we define which files to save, we save compiled code from the Runner's working directory.
+    expire_in: 30 minutes  # Don't keep these long
 
 # this job tests compiled code, runs on all pipelines
 unit-and-integration-tests-job:
@@ -100,6 +101,7 @@ package-job:
       - target/*.jar # Save the JAR file for the next job
     exclude:
       - target/*original.jar
+    expire_in: 1 hour
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
@@ -136,8 +138,8 @@ scan-image-job:
   before_script:
     - apk add --no-cache curl
     - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${TRIVY_VERSION}
-  needs: 
-    - job: build-image-job 
+  needs:
+    - job: build-image-job
       artifacts: true 
   script:
     - echo "Loading Docker image from .tar artifact..."
@@ -155,14 +157,11 @@ publish-container-image:
   image: docker:24-cli
   services:
     - docker:24-dind
-  dependencies:
-    - build-image-job # This job depends on the build-image-job to get the Docker image
-  before_script:
-    - echo "Ensuring a clean workspace..."
-    - rm -rf helm-chart/ # Forcefully remove any old chart directory
-    - git checkout -- helm-chart/ # Restore the correct version from the commit
-    - echo "Current helm chart files:"
-    - ls -la helm-chart/ # A diagnostic step to see what files are actually there
+  needs:
+    - job: build-image-job
+      artifacts: true    # Only get my-image.tar
+    # - job: scan-image-job # Wait for scan to complete, but no artifacts
+    #  artifacts: false   # Don't download scan artifacts
   script:
     - echo "Logging into GitLab Container Registry..."
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
@@ -184,6 +183,9 @@ deploy-to-staging:
   image:
     name: alpine/git:latest
     entrypoint: [""]
+  needs:
+    - job: publish-container-image
+      artifacts: false
   before_script:
     - apk add --no-cache curl # Install curl to download yq
     - curl -L https://github.com/mikefarah/yq/releases/download/v4.35.1/yq_linux_amd64 -o /usr/bin/yq # The server sends back a binary file in the HTTP response body
