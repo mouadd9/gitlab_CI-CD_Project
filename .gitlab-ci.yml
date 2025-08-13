@@ -149,35 +149,6 @@ scan-image-job:
   # rules:
     # - if: '$CI_COMMIT_BRANCH == "main"'
 
-# After your existing package-job
-package-helm-chart:
-  stage: package-and-scan
-  image:
-    name: alpine/helm:latest
-    entrypoint: [""]
-  dependencies: []
-  script:
-    - echo "Packaging Helm chart..."
-    - cd helm-chart/
-    # 1. Read the version from Chart.yaml
-    - CHART_VERSION=$(yq eval '.version' Chart.yaml)
-    - echo "Found chart version $CHART_VERSION"
-
-    # 2. Use the dynamic $CHART_VERSION variable instead of "0.1.0"
-    - helm package . --version ${CHART_VERSION}+${CI_COMMIT_SHORT_SHA} --app-version $CI_COMMIT_SHORT_SHA
-
-    # 3. Create a .env file to pass the version to the next stage
-    - echo "CHART_VERSION=$CHART_VERSION" > ../build.env
-    - echo "Chart packaged as helm-chart-$CI_COMMIT_SHORT_SHA.tgz"
-  artifacts:
-    paths: # tells GitLab to find the newly created .tgz file inside the helm-chart directory and save it as a job artifact
-      - helm-chart/*.tgz
-    reports:
-      dotenv: build.env
-    expire_in: 1 hour
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-
 # only runs after code is merged to main (ready for pre prod)
 publish-container-image:
   stage: publish
@@ -208,24 +179,7 @@ publish-container-image:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-publish-helm-chart:
-  stage: publish
-  image:
-    name: alpine/helm:latest
-    entrypoint: [""]
-  dependencies:
-    - package-helm-chart
-  before_script:
-    - echo "Logging into GitLab Container Registry for Helm charts..."
-    - echo "$CI_REGISTRY_PASSWORD" | helm registry login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
-  script:
-    - echo "Pushing Helm chart to registry..."
-    - helm push helm-chart/*.tgz oci://$CI_REGISTRY/$CI_PROJECT_PATH
-    - echo "✅ Chart pushed successfully!"
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-
-update-gitops-repo:
+deploy-to-staging:
   stage: deploy
   image:
     name: alpine/git:latest
@@ -240,16 +194,11 @@ update-gitops-repo:
     - git clone https://pipeline:${GITOPS_REPO_TOKEN}@gitlab.com/mouadd9/gitops-infra-repo
   script:
     - cd gitops-infra-repo
-    - echo "Updating Helm chart version in GitOps repository..."
-    - echo "Updating Helm chart version to $CHART_VERSION+$CI_COMMIT_SHORT_SHA"
-
-    - yq eval '.spec.sources[0].targetRevision = "'${CHART_VERSION}+${CI_COMMIT_SHORT_SHA}'"' -i applications/app-staging.yaml
     - yq eval '.image.tag = "'$CI_COMMIT_SHORT_SHA'"' -i environments/values-staging.yaml
     - git add .
     - |
       git commit -m "Deploy version $CI_COMMIT_SHORT_SHA
       Image: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
-      Chart: oci://$CI_REGISTRY/$CI_PROJECT_PATH/helm-chart:$CI_COMMIT_SHORT_SHA
       Pipeline: $CI_PIPELINE_URL"
     - git push
   rules:
