@@ -17,10 +17,10 @@ stages:
 secret-detection:
   stage: security-scan
   image:
-    name: gitleaks/gitleaks:latest
+    name: "zricethezav/gitleaks:latest"
     entrypoint: [""]
   script:
-    - gitleaks detect --source . --verbose --redact --report-format json --report-path gitleaks-report.json
+    - gitleaks detect --verbose --report-path gitleaks-report.json --exit-code 1
   artifacts:
     paths:
       - gitleaks-report.json
