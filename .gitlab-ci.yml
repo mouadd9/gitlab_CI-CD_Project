@@ -89,7 +89,9 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
     - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
+      when : never
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "false"'
+      when : never
 
 # this job scans dependencies runs on all pipelines
 trivy-dependency-scan-job:
