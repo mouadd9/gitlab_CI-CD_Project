@@ -20,7 +20,7 @@ secret-detection:
     name: "zricethezav/gitleaks:latest"
     entrypoint: [""]
   script:
-    - gitleaks detect --verbose --report-path gitleaks-report.json
+    - gitleaks detect -no-git --verbose --report-path gitleaks-report.json
   artifacts:
     paths:
       - gitleaks-report.json
