@@ -1,26 +1,36 @@
-stages:
-  - build # compile source code
-  - test # unit + integration tests
-  - security-analysis # This stage runs security and quality checks in parallel.
-  - package-and-scan # # This stage packages your application into a Docker image and then scans that image for vulnerabilities.
-  - publish # This final job pushes the verified and scanned Docker image to the GitLab Container Registry. It should typically only run on your main branch.
-  - deploy # triggers a deployment using a GitOps workflow with Flux.
-
 workflow:
   rules:
-    # Merge Request Pipeline (when merge request is submitted)
+    # Rule for Pipeline 1 & 2: Runs on merge requests
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    # Feature Branch Pipeline (when code is pushed to feature branch with no submitted MR)
-    - if: '$CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != "main" && $CI_PIPELINE_SOURCE == "push" && $CI_OPEN_MERGE_REQUESTS == null'
-    # Main Branch Pipeline (when code is merged to main -> Deploys to Pre-Prod)
+    # Rule for Pipeline 3: Runs on merges to the main branch
     - if: '$CI_COMMIT_BRANCH == "main"'
-    # Production Branch Pipeline (when code is merged to production -> Deploys to Prod)
-    - if: '$CI_COMMIT_BRANCH == "production"'
-    # Rule 3: Run a pipeline if a tag is pushed.
-    - if: '$CI_COMMIT_TAG'
+
+stages:
+  - security-scan
+  - build
+  - test
+  - security-analysis
+  - package-and-scan
+  - publish
+  - deploy
+
+secret-detection:
+  stage: security-scan
+  image:
+    name: gitleaks/gitleaks:latest
+    entrypoint: [""]
+  script:
+    - gitleaks detect --source . --verbose --redact --report-format json --report-path gitleaks-report.json
+  artifacts:
+    paths:
+      - gitleaks-report.json
+  # This job runs in all pipelines (Draft MR, Ready MR, Main branch)
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # This job compiles code runs on all pipelines
-build-job:
+compile-code:
   stage: build
   image: eclipse-temurin:21-jdk
   script:
@@ -28,29 +38,43 @@ build-job:
     - ./mvnw clean compile
   artifacts:
     paths:
-      - target/ # here we define which files to save, we save compiled code from the Runner's working directory.
-    expire_in: 30 minutes  # Don't keep these long
+      - target/
+    expire_in: 30 minutes
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+unit-tests:
+  stage: test
+  image: eclipse-temurin:21-jdk
+  needs:
+    - compile-code
+  script:
+    - ./mvnw test
+  artifacts:
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
 
 # this job tests compiled code, runs on all pipelines
-unit-and-integration-tests-job:
+integration-tests:
   stage: test
-  image: eclipse-temurin:21-jdk 
+  image: eclipse-temurin:21-jdk
   services:
-    - docker:24-dind # this service provides the Docker daemon that the Docker CLI in your main container connects to, enabling you to build and manage containers within your CI/CD pipeline.
+    - docker:24-dind
   variables:
-    DOCKER_HOST: tcp://docker:2375 # Tell Testcontainers where to find the Docker daemon
-  dependencies:
-    - build-job   
-  before_script:
-    - apt-get update && apt-get install -y docker.io # we use this to install Docker CLI
+    DOCKER_HOST: tcp://docker:2375
+  needs:
+    - compile-code
   script:
-    - echo "Running tests..."
-    - ./mvnw test failsafe:integration-test
-  artifacts:
-    paths:
-      - target/
+    - ./mvnw failsafe:integration-test
+  #  only for "Ready" MRs and main branch pipelines
   rules:
-    - when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "false"'
 
 # this job scans code for vulnerabilities and checks code quality runs on all pipelines
 sonarqube-job: # this job should run on your local runner, because the sonarQube instance is running locally
@@ -59,12 +83,13 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
   tags:
     - local-docker # the tag for the local runner that can connect to the local SonarQube
   dependencies:
-    - unit-and-integration-tests-job # This job now depends on the test job to get the coverage reports
+    - unit-tests # This job now depends on the test job to get the coverage reports
   script:
     - echo "Running SonarQube analysis..."
-  #  - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+    - ./mvnw sonar:sonar -Dsonar.projectKey=my-springboot-project -Dsonar.host.url=http://sonarqube:9000 -Dsonar.login=$SONAR_TOKEN -Dsonar.qualitygate.wait=true -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
   rules:
-    - when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "false"'
 
 # this job scans dependencies runs on all pipelines
 trivy-dependency-scan-job:
@@ -85,14 +110,15 @@ trivy-dependency-scan-job:
     paths:
       - trivy-report.json
   rules:
-    - when: never
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "false"'
 
 # this job packages code into a .jar, only runs when code is merged to the main
 package-job: 
   stage: package-and-scan
   image: eclipse-temurin:21-jdk
   dependencies:
-    - build-job
+    - compile-code
   script:
     - echo "Packaging application into JAR..."
     - ./mvnw package -DskipTests -DskipITs # package and skip tests
@@ -126,7 +152,7 @@ build-image-job:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
-# we only build and scan images in the Merge Request pipeline
+# we only build and scan images if code is merged into main
 scan-image-job:
   stage: package-and-scan
   image: docker:24-cli 
@@ -147,9 +173,7 @@ scan-image-job:
     - echo "Scanning Docker image for vulnerabilities..."
     - trivy image --exit-code 1 --severity HIGH,CRITICAL my-app:$CI_COMMIT_SHORT_SHA
   rules:
-    - when: never
-  # rules:
-    # - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
 
 # only runs after code is merged to main (ready for pre prod)
 publish-container-image:
@@ -160,8 +184,8 @@ publish-container-image:
   needs:
     - job: build-image-job
       artifacts: true    # Only get my-image.tar
-    # - job: scan-image-job # Wait for scan to complete, but no artifacts
-    #  artifacts: false   # Don't download scan artifacts
+    - job: scan-image-job # Wait for scan to complete, but no artifacts
+      artifacts: false   # Don't download scan artifacts
   script:
     - echo "Logging into GitLab Container Registry..."
     - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin

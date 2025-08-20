@@ -20,9 +20,6 @@ resource "google_container_cluster" "primary" {
     enable_private_endpoint = false
     master_ipv4_cidr_block  = "172.16.0.0/28"
   }
-  # network_policy
-  # private_cluster_config
-  # workload_identity_config
 }
 
 # 4. Define a custom node pool for the cluster's worker machines
@@ -37,7 +34,6 @@ resource "google_container_node_pool" "primary_nodes" {
     ]
     # service_account = google_service_account.gke_nodes_sa.email
   }
-  # management
 }
 
 ### NOTE
