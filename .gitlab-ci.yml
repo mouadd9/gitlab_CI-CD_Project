@@ -93,6 +93,7 @@ sonarqube-job: # this job should run on your local runner, because the sonarQube
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_DRAFT == "false"'
       when : never
 
+# test
 # this job scans dependencies runs on all pipelines
 trivy-dependency-scan-job:
   stage: security-analysis
